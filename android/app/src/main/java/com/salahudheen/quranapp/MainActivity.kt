@@ -1,4 +1,5 @@
-package com.quranapp
+package com.salahudheen.quranapp
+
 
 import com.facebook.react.ReactActivity
 import com.facebook.react.ReactActivityDelegate
