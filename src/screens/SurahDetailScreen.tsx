@@ -9,7 +9,11 @@ import {
   TouchableOpacity,
   InteractionManager,
 } from "react-native";
-import { PinchGestureHandler, State } from "react-native-gesture-handler";
+import {
+  PinchGestureHandler,
+  TapGestureHandler,
+  State,
+} from "react-native-gesture-handler";
 import { getAyahsBySurah, Ayah } from "../database/db";
 import { useNavigation } from "@react-navigation/native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -29,7 +33,13 @@ const SurahDetailScreen: React.FC<Props> = ({ route }) => {
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
   const [ayahPositions, setAyahPositions] = useState<number[]>([]);
   const [allMeasured, setAllMeasured] = useState(false);
-  const scale = useRef(new Animated.Value(1)).current;
+
+  // Zoom handling
+  const baseScale = useRef(new Animated.Value(1)).current;
+  const pinchScale = useRef(new Animated.Value(1)).current;
+  const lastScale = useRef(1);
+  const scale = Animated.multiply(baseScale, pinchScale);
+
   const scrollRef = useRef<ScrollView>(null);
   const navigation = useNavigation();
 
@@ -75,19 +85,47 @@ const SurahDetailScreen: React.FC<Props> = ({ route }) => {
     });
   }, [navigation, name]);
 
-  const onPinchEvent = Animated.event([{ nativeEvent: { scale } }], {
-    useNativeDriver: true,
-  });
+  // Pinch Zoom Event
+  const onPinchEvent = Animated.event(
+    [{ nativeEvent: { scale: pinchScale } }],
+    { useNativeDriver: true }
+  );
 
   const onPinchStateChange = (event: any) => {
     if (event.nativeEvent.oldState === State.ACTIVE) {
-      Animated.spring(scale, { toValue: 1, useNativeDriver: true }).start();
+      let newScale = lastScale.current * event.nativeEvent.scale;
+
+      // Clamp between min/max
+      if (newScale < 0.8) newScale = 0.8;
+      if (newScale > 3) newScale = 3;
+
+      lastScale.current = newScale;
+      baseScale.setValue(lastScale.current);
+      pinchScale.setValue(1);
+    }
+  };
+
+  // Double Tap Zoom
+  const onDoubleTap = (event: any) => {
+    if (event.nativeEvent.state === State.ACTIVE) {
+      let newScale = lastScale.current > 1 ? 1 : 2; // toggle 1x ↔ 2x
+
+      lastScale.current = newScale;
+      Animated.timing(baseScale, {
+        toValue: newScale,
+        duration: 200,
+        useNativeDriver: true,
+      }).start();
     }
   };
 
   const toArabicNumber = (num: number) => {
     const arabicDigits = ["٠","١","٢","٣","٤","٥","٦","٧","٨","٩"];
-    return `﴿${num.toString().split("").map(d => arabicDigits[parseInt(d)]).join("")}﴾`;
+    return `﴿${num
+      .toString()
+      .split("")
+      .map((d) => arabicDigits[parseInt(d)])
+      .join("")}﴾`;
   };
 
   // Scroll after all ayahs are measured
@@ -112,7 +150,6 @@ const SurahDetailScreen: React.FC<Props> = ({ route }) => {
           const newPositions = [...prev];
           newPositions[index] = layout.y;
 
-          // Check if all ayahs are measured
           if (newPositions.filter((v) => v !== undefined).length === ayahs.length) {
             setAllMeasured(true);
           }
@@ -144,8 +181,22 @@ const SurahDetailScreen: React.FC<Props> = ({ route }) => {
         text = item.text.replace(bismillah, "").trim();
         return (
           <View key={item.id} style={{ marginBottom: 24 }}>
-            <Text style={styles.bismillah}>{bismillah}</Text>
-            {text.length > 0 && renderAyahRow(index, text)}
+            <View style={styles.ayahRow}>
+              <Text style={styles.ayahText}>
+                <Text style={styles.bismillah}>{bismillah} </Text>
+                {text} {toArabicNumber(index + 1)}
+              </Text>
+              <TouchableOpacity onPress={() => toggleBookmarkForIndex(index)}>
+                <Text
+                  style={[
+                    styles.bookmarkIcon,
+                    bookmarks.find((b) => b.ayahIndex === index) && styles.activeBookmark,
+                  ]}
+                >
+                  {bookmarks.find((b) => b.ayahIndex === index) ? "★" : "☆"}
+                </Text>
+              </TouchableOpacity>
+            </View>
           </View>
         );
       }
@@ -154,20 +205,29 @@ const SurahDetailScreen: React.FC<Props> = ({ route }) => {
 
   return (
     <View style={styles.container}>
-      <Text style={styles.surahTitle}>{name}</Text>
-      <PinchGestureHandler
-        onGestureEvent={onPinchEvent}
-        onHandlerStateChange={onPinchStateChange}
+      <TapGestureHandler
+        numberOfTaps={2}
+        onHandlerStateChange={onDoubleTap}
+        maxDelayMs={300}
       >
-        <Animated.View style={{ transform: [{ scale }] }}>
-          <ScrollView
-            ref={scrollRef}
-            contentContainerStyle={styles.scrollContainer}
+        <Animated.View style={{ flex: 1 }}>
+          <PinchGestureHandler
+            onGestureEvent={onPinchEvent}
+            onHandlerStateChange={onPinchStateChange}
           >
-            {renderParagraph()}
-          </ScrollView>
+            <Animated.View style={{ transform: [{ scale }] }}>
+              <ScrollView
+                ref={scrollRef}
+                contentContainerStyle={styles.scrollContainer}
+              >
+                <Text style={styles.surahTitle}>{name}</Text>
+                {renderParagraph()}
+                <View style={{ height: 100 }} />
+              </ScrollView>
+            </Animated.View>
+          </PinchGestureHandler>
         </Animated.View>
-      </PinchGestureHandler>
+      </TapGestureHandler>
     </View>
   );
 };
@@ -176,7 +236,7 @@ export default SurahDetailScreen;
 
 const styles = StyleSheet.create({
   container: { flex: 1, paddingTop: 16, backgroundColor: "#121212" },
-  scrollContainer: { paddingBottom: 40, paddingHorizontal: 16 },
+  scrollContainer: { paddingBottom: 250, paddingHorizontal: 16 },
   surahTitle: {
     fontSize: 32,
     fontWeight: "700",
@@ -188,16 +248,13 @@ const styles = StyleSheet.create({
   },
   bismillah: {
     fontSize: 32,
-    textAlign: "center",
     fontFamily: "Amiri-Regular",
-    marginBottom: 20,
-    color: "#E0E0E0",
-    lineHeight: 50,
+    color: "#FFD700",
   },
   ayahText: {
-    fontSize: 28,
-    lineHeight: 50,
-    textAlign: "center",
+    fontSize: 30,
+    lineHeight: 60,
+    textAlign: "left",
     fontFamily: "Amiri-Regular",
     color: "#FFFFFF",
     marginRight: 10,
