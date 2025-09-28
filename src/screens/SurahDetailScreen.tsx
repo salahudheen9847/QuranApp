@@ -8,6 +8,7 @@ import {
   Animated,
   TouchableOpacity,
   InteractionManager,
+  PanResponder,
 } from "react-native";
 import {
   PinchGestureHandler,
@@ -34,14 +35,30 @@ const SurahDetailScreen: React.FC<Props> = ({ route }) => {
   const [ayahPositions, setAyahPositions] = useState<number[]>([]);
   const [allMeasured, setAllMeasured] = useState(false);
 
-  // Zoom handling
   const baseScale = useRef(new Animated.Value(1)).current;
   const pinchScale = useRef(new Animated.Value(1)).current;
   const lastScale = useRef(1);
   const scale = Animated.multiply(baseScale, pinchScale);
 
+  const translateX = useRef(new Animated.Value(0)).current;
+  const translateY = useRef(new Animated.Value(0)).current;
+
   const scrollRef = useRef<ScrollView>(null);
+  const pinchRef = useRef<PinchGestureHandler>(null);
+  const tapRef = useRef<TapGestureHandler>(null);
   const navigation = useNavigation();
+
+  // PanResponder for moving content when zoomed
+  const panResponder = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (_, gesture) => lastScale.current > 1,
+      onPanResponderMove: (_, gesture) => {
+        translateX.setValue(gesture.dx);
+        translateY.setValue(gesture.dy);
+      },
+      onPanResponderRelease: () => {},
+    })
+  ).current;
 
   useEffect(() => {
     getAyahsBySurah(id, setAyahs);
@@ -85,7 +102,6 @@ const SurahDetailScreen: React.FC<Props> = ({ route }) => {
     });
   }, [navigation, name]);
 
-  // Pinch Zoom Event
   const onPinchEvent = Animated.event(
     [{ nativeEvent: { scale: pinchScale } }],
     { useNativeDriver: true }
@@ -94,22 +110,17 @@ const SurahDetailScreen: React.FC<Props> = ({ route }) => {
   const onPinchStateChange = (event: any) => {
     if (event.nativeEvent.oldState === State.ACTIVE) {
       let newScale = lastScale.current * event.nativeEvent.scale;
-
-      // Clamp between min/max
       if (newScale < 0.8) newScale = 0.8;
       if (newScale > 3) newScale = 3;
-
       lastScale.current = newScale;
       baseScale.setValue(lastScale.current);
       pinchScale.setValue(1);
     }
   };
 
-  // Double Tap Zoom
   const onDoubleTap = (event: any) => {
     if (event.nativeEvent.state === State.ACTIVE) {
-      let newScale = lastScale.current > 1 ? 1 : 2; // toggle 1x ↔ 2x
-
+      let newScale = lastScale.current > 1 ? 1 : 2;
       lastScale.current = newScale;
       Animated.timing(baseScale, {
         toValue: newScale,
@@ -121,19 +132,13 @@ const SurahDetailScreen: React.FC<Props> = ({ route }) => {
 
   const toArabicNumber = (num: number) => {
     const arabicDigits = ["٠","١","٢","٣","٤","٥","٦","٧","٨","٩"];
-    return `﴿${num
-      .toString()
-      .split("")
-      .map((d) => arabicDigits[parseInt(d)])
-      .join("")}﴾`;
+    return `﴿${num.toString().split("").map(d => arabicDigits[parseInt(d)]).join("")}﴾`;
   };
 
-  // Scroll after all ayahs are measured
   useEffect(() => {
     if (allMeasured && (scrollToAyah !== undefined || bookmarks.length > 0)) {
       const indexToScroll = scrollToAyah ?? bookmarks[0].ayahIndex;
       const yPos = ayahPositions[indexToScroll] || 0;
-
       InteractionManager.runAfterInteractions(() => {
         scrollRef.current?.scrollTo({ y: yPos, animated: true });
       });
@@ -149,7 +154,6 @@ const SurahDetailScreen: React.FC<Props> = ({ route }) => {
         setAyahPositions((prev) => {
           const newPositions = [...prev];
           newPositions[index] = layout.y;
-
           if (newPositions.filter((v) => v !== undefined).length === ayahs.length) {
             setAllMeasured(true);
           }
@@ -157,17 +161,15 @@ const SurahDetailScreen: React.FC<Props> = ({ route }) => {
         });
       }}
     >
-      <Text style={styles.ayahText}>
-        {text} {toArabicNumber(index + 1)}
-      </Text>
+      <Text style={styles.ayahText}>{text} {toArabicNumber(index + 1)}</Text>
       <TouchableOpacity onPress={() => toggleBookmarkForIndex(index)}>
         <Text
           style={[
             styles.bookmarkIcon,
-            bookmarks.find((b) => b.ayahIndex === index) && styles.activeBookmark,
+            bookmarks.find(b => b.ayahIndex === index) && styles.activeBookmark
           ]}
         >
-          {bookmarks.find((b) => b.ayahIndex === index) ? "★" : "☆"}
+          {bookmarks.find(b => b.ayahIndex === index) ? "★" : "☆"}
         </Text>
       </TouchableOpacity>
     </View>
@@ -190,10 +192,10 @@ const SurahDetailScreen: React.FC<Props> = ({ route }) => {
                 <Text
                   style={[
                     styles.bookmarkIcon,
-                    bookmarks.find((b) => b.ayahIndex === index) && styles.activeBookmark,
+                    bookmarks.find(b => b.ayahIndex === index) && styles.activeBookmark
                   ]}
                 >
-                  {bookmarks.find((b) => b.ayahIndex === index) ? "★" : "☆"}
+                  {bookmarks.find(b => b.ayahIndex === index) ? "★" : "☆"}
                 </Text>
               </TouchableOpacity>
             </View>
@@ -206,20 +208,22 @@ const SurahDetailScreen: React.FC<Props> = ({ route }) => {
   return (
     <View style={styles.container}>
       <TapGestureHandler
+        ref={tapRef}
         numberOfTaps={2}
         onHandlerStateChange={onDoubleTap}
         maxDelayMs={300}
       >
         <Animated.View style={{ flex: 1 }}>
           <PinchGestureHandler
+            ref={pinchRef}
             onGestureEvent={onPinchEvent}
             onHandlerStateChange={onPinchStateChange}
           >
-            <Animated.View style={{ transform: [{ scale }] }}>
-              <ScrollView
-                ref={scrollRef}
-                contentContainerStyle={styles.scrollContainer}
-              >
+            <Animated.View
+              {...panResponder.panHandlers}
+              style={{ transform: [{ scale }, { translateX }, { translateY }] }}
+            >
+              <ScrollView ref={scrollRef} contentContainerStyle={styles.scrollContainer}>
                 <Text style={styles.surahTitle}>{name}</Text>
                 {renderParagraph()}
                 <View style={{ height: 100 }} />
@@ -252,12 +256,13 @@ const styles = StyleSheet.create({
     color: "#FFD700",
   },
   ayahText: {
-    fontSize: 30,
+    fontSize: 38,
     lineHeight: 60,
-    textAlign: "left",
+    textAlign: "center",
     fontFamily: "Amiri-Regular",
     color: "#FFFFFF",
-    marginRight: 10,
+    marginRight: 2,
+    marginLeft: 12,
   },
   ayahRow: {
     flexDirection: "row",
